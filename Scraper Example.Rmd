@@ -1,0 +1,106 @@
+---
+title: "scraping example"
+author: "Richard G. Gardiner"
+date: "12/13/2018"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+This short tutorial is really for myself about scraping a single html table then doing so for a multiple page table.  This took a long time to figure out and requires the use of the tidyverse, rvest, and glue package.  All of these are strongly associated with Hadley Wickham who deserves all praise.  This [example](https://stat4701.github.io/edav/2015/04/02/rvest_tutorial/) also looks interesting for those who are new.  This example came out of a real use case in which I needed to do an anti_merge against this list and was morally opposed to doing this by hand.
+
+## Loading Packages
+
+```{r}
+library(tidyverse)
+library(rvest)
+library(glue)
+```
+
+## Prepping the scraper
+
+Note: I am not writing in technical terms.  This will likely cause some to scream into a pillow, but this is written primarily for me or someone who is new to scraping from html tables.
+
+The first step is to put into a variable the url where the html (data-table) is located.  
+```{r}
+url <- "https://abop.org/verify-a-physician/?fv=Location&st=GA&rptPhysicianList=14#physician-list-search-results"
+```
+
+## Scraping the table
+The next step is where the meat happens.  Using the pipes (tidyverse), I creating a new variable `name_test` that uses the variable url.  
+
+Each of the following are tied to the rvest package.  The next line `read_html()` has R reading the actual webpage.  The `html_nodes()` function selects the part of the html document using the css selectors. Visit this [rbloogers](https://www.r-bloggers.com/using-rvest-to-scrape-an-html-table/) post to see how to find the correct spot (note, it took me about 7 tries to find the right selector).  The last command creates a dataframe from the html table you are trying to scrape.  
+```{r}
+single_table <- url %>%
+  read_html() %>%
+  html_nodes(xpath = '//*[@id="verify-results"]/table') %>%
+  html_table()
+```
+
+The output of the last code chunk returns a list which you can unnest using the following code:
+
+```{r}
+df1 <- single_table[[1]]
+
+head(df1)
+```
+
+Note that my first row should really be the column names which takes just 2 lines of code:
+
+```{r}
+colnames(df1) <- df1[1,] # creates column names out of the first row
+df1 <- df1[-1,] # removes that first row
+head(df1) 
+```
+
+## Scraping Across Multiple Pages
+
+The process for multiple pages is the same as for one page, but with a little bit of looping.  This likely isn't the fastest code, but that can happen later.
+
+### Finding the pattern
+
+Most websites that have pagination also have some pattern.  In this case the pattern is the page number right after "rptPhysicianList=PAGE NUMBER".  In this example there are 42 pages starting at index 0 and going to 41.  Now I create a vector called `links` ranging from 0 to 41.  Then using the `glue` package I create a variable that is 42 unique links where `{links}` insert each number.
+
+```{r}
+links <- 0:41
+urls <- glue("https://abop.org/verify-a-physician/?fv=Location&st=GA&rptPhysicianList={links}#physician-list-search-results")
+```
+
+
+The next line does the same as a single url process that was done above, but loops for each url in the `urls` vector.  This returns a list of 42 dataframes which then need to be turned into one dataframe.
+```{r}
+tables <- sapply(urls, function(i) {
+  test <- i %>%
+    read_html() %>%
+    html_nodes(xpath = '//*[@id="verify-results"]/table') %>%
+    html_table()
+})
+```
+
+Now we want to take teh 42 separate dataframes nested within the `tables` list and combines each row using "rbind".  
+```{r}
+df2 <- do.call("rbind", tables)
+head(df2)
+```
+
+It looks like the combining worked well with only one problem, the "Name", "Location", "Certification Status", and "Certification History" is still included multiple times.  There are also no column headers.  We can fix this using the following code:
+
+```{r}
+df2 <- df2 %>%
+  distinct(.keep_all = TRUE) # gets rid of the mutiple duplicated value, this should only be done in certain circumstances
+colnames(df2) <- df2[1,] # creates column names out of the first row
+
+df2 <- df2[-1,] # removes that first row
+
+head(df2)
+```
+
+There is still a lot to do with parsing out the name and location columns.  All of which can be done with the stringr package.
+
+Lastly, you can export this using the `write_csv()` functionality
+```{r}
+# write_csv(certified2, "board certified opthalmoloy.csv")
+```
+
